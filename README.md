@@ -1,8 +1,6 @@
 # Go Load Balancer
 
-
-This project is an implementation of the load balancing algorithm described in the paper "Load is not what you should balance: Introducing Prequal" (NSDI '24). It demonstrates key concepts
-including Power of d choices, RIF (Requests in Flight) tracking, and HCL (Hot-Cold Lexicographic) scoring.
+This project is an implementation of the load balancing algorithm described in the paper "Load is not what you should balance: Introducing Prequal" (NSDI '24). It demonstrates key concepts including Power of d choices, RIF (Requests in Flight) tracking, and HCL (Hot-Cold Lexicographic) scoring.
 
 ## What's inside
 
@@ -20,8 +18,13 @@ including Power of d choices, RIF (Requests in Flight) tracking, and HCL (Hot-Co
 ## Getting started
 
 ```bash
-git clone https://github.com/yourusername/loadbalancer.git
+git clone https://github.com/omarshaarawi/loadbalancer.git
 cd loadbalancer
+./setup.sh
+```
+
+Or manually:
+```bash
 docker-compose up --build
 ```
 
@@ -42,7 +45,13 @@ Then check out:
 
 Quick test:
 ```bash
-curl http://localhost:8080 ```
+curl http://localhost:8080
+```
+
+Check which servers are getting requests:
+```bash
+for i in {1..20}; do curl -I http://localhost:8080 2>&1 | grep -i "x-served-by"; done
+```
 
 Load test with hey:
 ```bash
@@ -52,7 +61,12 @@ hey -n 1000 -c 50 http://localhost:8080/
 
 Or just loop curl if you want:
 ```bash
-for i in {1..10}; do curl http://localhost:8080; done
+for i in {1..1000}; do curl -s http://localhost:8080 > /dev/null; done
+```
+
+Check RIF metrics while load is running:
+```bash
+curl http://localhost:8080/metrics | grep -E "active_requests|server_rif"
 ```
 
 ## References

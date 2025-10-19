@@ -180,7 +180,15 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (lb *LoadBalancer) forwardRequest(server *Server, w http.ResponseWriter, r *http.Request) {
 	atomic.AddInt32(&server.RIF, 1)
-	defer atomic.AddInt32(&server.RIF, -1)
+	lb.metrics.activeRequests.Inc()
+
+	defer func() {
+		atomic.AddInt32(&server.RIF, -1)
+		lb.metrics.activeRequests.Dec()
+
+		currentRIF := atomic.LoadInt32(&server.RIF)
+		lb.metrics.serverRIF.WithLabelValues(server.ID).Set(float64(currentRIF))
+	}()
 
 	targetURL, _ := url.Parse("http://" + server.Address)
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)

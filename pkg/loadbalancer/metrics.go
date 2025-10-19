@@ -8,6 +8,7 @@ type Metrics struct {
 	requestDuration prometheus.Histogram
 	activeRequests  prometheus.Gauge
 	serverHealth    *prometheus.GaugeVec
+	serverRIF       *prometheus.GaugeVec
 }
 
 func NewMetrics() *Metrics {
@@ -28,11 +29,19 @@ func NewMetrics() *Metrics {
 			},
 			[]string{"server_id"},
 		),
+		serverRIF: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "server_rif",
+				Help: "Requests in flight per server",
+			},
+			[]string{"server_id"},
+		),
 	}
 
 	prometheus.MustRegister(m.requestDuration)
 	prometheus.MustRegister(m.activeRequests)
 	prometheus.MustRegister(m.serverHealth)
+	prometheus.MustRegister(m.serverRIF)
 
 	return m
 }
