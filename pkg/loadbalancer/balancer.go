@@ -20,6 +20,7 @@ type LoadBalancer struct {
 	logger    *slog.Logger
 	metrics   *Metrics
 	mutex     sync.RWMutex
+	rrIndex   uint32
 }
 
 func NewLoadBalancer(config *Config, logger *slog.Logger) *LoadBalancer {
@@ -29,7 +30,15 @@ func NewLoadBalancer(config *Config, logger *slog.Logger) *LoadBalancer {
 			ProbeTimeout:     time.Second * 2,
 			HealthCheckPath:  "/health",
 			SelectionChoices: 2,
+			Algorithm:        AlgorithmPrequal,
+			QRIF:             0.84,
 		}
+	}
+	if config.Algorithm == "" {
+		config.Algorithm = AlgorithmPrequal
+	}
+	if config.QRIF == 0 {
+		config.QRIF = 0.84
 	}
 
 	return &LoadBalancer{
@@ -69,10 +78,11 @@ func (lb *LoadBalancer) probeAllServers() {
 			srv.Latency = result.Latency
 			lb.mutex.Unlock()
 
+			algorithm := string(lb.config.Algorithm)
 			if result.IsHealthy {
-				lb.metrics.serverHealth.WithLabelValues(srv.ID).Set(1)
+				lb.metrics.serverHealth.WithLabelValues(srv.ID, algorithm).Set(1)
 			} else {
-				lb.metrics.serverHealth.WithLabelValues(srv.ID).Set(0)
+				lb.metrics.serverHealth.WithLabelValues(srv.ID, algorithm).Set(0)
 			}
 		}(server)
 	}
@@ -124,6 +134,36 @@ func (lb *LoadBalancer) AddServer(server *Server) {
 }
 
 func (lb *LoadBalancer) SelectServer() *Server {
+	if lb.config.Algorithm == AlgorithmRoundRobin {
+		return lb.selectServerRR()
+	}
+	return lb.selectServerPrequal()
+}
+
+func (lb *LoadBalancer) selectServerRR() *Server {
+	lb.mutex.RLock()
+	defer lb.mutex.RUnlock()
+
+	if len(lb.servers) == 0 {
+		return nil
+	}
+
+	healthyServers := make([]*Server, 0, len(lb.servers))
+	for _, server := range lb.servers {
+		if server.IsHealthy {
+			healthyServers = append(healthyServers, server)
+		}
+	}
+
+	if len(healthyServers) == 0 {
+		return nil
+	}
+
+	index := atomic.AddUint32(&lb.rrIndex, 1)
+	return healthyServers[int(index-1)%len(healthyServers)]
+}
+
+func (lb *LoadBalancer) selectServerPrequal() *Server {
 	lb.mutex.RLock()
 	defer lb.mutex.RUnlock()
 
@@ -141,17 +181,94 @@ func (lb *LoadBalancer) SelectServer() *Server {
 }
 
 func (lb *LoadBalancer) selectBestCandidate(candidates []*Server) *Server {
-	var best *Server
-	var bestScore float64 = float64(^uint64(0) >> 1)
-
+	healthyCandidates := make([]*Server, 0, len(candidates))
 	for _, server := range candidates {
-		if !server.IsHealthy {
-			continue
+		if server.IsHealthy {
+			healthyCandidates = append(healthyCandidates, server)
 		}
+	}
 
-		score := float64(server.RIF) * float64(server.Latency)
-		if score < bestScore {
-			bestScore = score
+	if len(healthyCandidates) == 0 {
+		return nil
+	}
+
+	rifThreshold := lb.calculateRIFThreshold(healthyCandidates)
+
+	var coldServers []*Server
+	var hotServers []*Server
+
+	for _, server := range healthyCandidates {
+		rif := atomic.LoadInt32(&server.RIF)
+		if rif > rifThreshold {
+			hotServers = append(hotServers, server)
+		} else {
+			coldServers = append(coldServers, server)
+		}
+	}
+
+	if len(coldServers) > 0 {
+		return lb.selectLowestLatency(coldServers)
+	}
+
+	return lb.selectLowestRIF(hotServers)
+}
+
+func (lb *LoadBalancer) calculateRIFThreshold(servers []*Server) int32 {
+	if len(servers) == 0 {
+		return 0
+	}
+
+	rifValues := make([]int32, len(servers))
+	for i, server := range servers {
+		rifValues[i] = atomic.LoadInt32(&server.RIF)
+	}
+
+	for i := 0; i < len(rifValues)-1; i++ {
+		for j := i + 1; j < len(rifValues); j++ {
+			if rifValues[i] > rifValues[j] {
+				rifValues[i], rifValues[j] = rifValues[j], rifValues[i]
+			}
+		}
+	}
+
+	index := int(float64(len(rifValues)-1) * lb.config.QRIF)
+	if index >= len(rifValues) {
+		index = len(rifValues) - 1
+	}
+
+	return rifValues[index]
+}
+
+func (lb *LoadBalancer) selectLowestLatency(servers []*Server) *Server {
+	if len(servers) == 0 {
+		return nil
+	}
+
+	best := servers[0]
+	minLatency := best.Latency
+
+	for _, server := range servers[1:] {
+		if server.Latency < minLatency {
+			minLatency = server.Latency
+			best = server
+		}
+	}
+
+	return best
+}
+
+func (lb *LoadBalancer) selectLowestRIF(servers []*Server) *Server {
+	if len(servers) == 0 {
+		return nil
+	}
+
+	best := servers[0]
+	minRIF := atomic.LoadInt32(&best.RIF)
+
+	for _, server := range servers[1:] {
+		rif := atomic.LoadInt32(&server.RIF)
+		if rif < minRIF {
+			minRIF = rif
 			best = server
 		}
 	}
@@ -174,20 +291,22 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	lb.forwardRequest(server, w, r)
 	duration := time.Since(start)
 
-	lb.metrics.requestDuration.Observe(duration.Seconds())
+	algorithm := string(lb.config.Algorithm)
+	lb.metrics.requestDuration.WithLabelValues(algorithm).Observe(duration.Seconds())
 	atomic.AddUint64(&lb.stats.SuccessfulRequests, 1)
 }
 
 func (lb *LoadBalancer) forwardRequest(server *Server, w http.ResponseWriter, r *http.Request) {
+	algorithm := string(lb.config.Algorithm)
 	atomic.AddInt32(&server.RIF, 1)
-	lb.metrics.activeRequests.Inc()
+	lb.metrics.activeRequests.WithLabelValues(algorithm).Inc()
 
 	defer func() {
 		atomic.AddInt32(&server.RIF, -1)
-		lb.metrics.activeRequests.Dec()
+		lb.metrics.activeRequests.WithLabelValues(algorithm).Dec()
 
 		currentRIF := atomic.LoadInt32(&server.RIF)
-		lb.metrics.serverRIF.WithLabelValues(server.ID).Set(float64(currentRIF))
+		lb.metrics.serverRIF.WithLabelValues(server.ID, algorithm).Set(float64(currentRIF))
 	}()
 
 	targetURL, _ := url.Parse("http://" + server.Address)

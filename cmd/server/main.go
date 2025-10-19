@@ -23,18 +23,27 @@ const (
 func main() {
 	ctx := context.Background()
 	port := flag.String("port", "8080", "Port to listen on")
+	algorithm := flag.String("algorithm", "prequal", "Load balancing algorithm (prequal or roundrobin)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	algo := *algorithm
+	if envAlgo := os.Getenv("LB_ALGORITHM"); envAlgo != "" {
+		algo = envAlgo
+	}
 
 	config := &loadbalancer.Config{
 		ProbeInterval:    time.Second,
 		ProbeTimeout:     time.Second * 2,
 		HealthCheckPath:  "/health",
 		SelectionChoices: 2,
+		Algorithm:        loadbalancer.Algorithm(algo),
 	}
 
 	lb := loadbalancer.NewLoadBalancer(config, logger)
+
+	logger.Info("Load balancer configured", slog.String("algorithm", string(config.Algorithm)))
 
 	testServers := []string{
 		"server1:80",

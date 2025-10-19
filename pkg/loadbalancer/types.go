@@ -21,11 +21,20 @@ type ProbeResult struct {
 	IsHealthy bool
 }
 
+type Algorithm string
+
+const (
+	AlgorithmPrequal     Algorithm = "prequal"
+	AlgorithmRoundRobin  Algorithm = "roundrobin"
+)
+
 type Config struct {
 	ProbeInterval    time.Duration
 	ProbeTimeout     time.Duration
 	HealthCheckPath  string
 	SelectionChoices int
+	Algorithm        Algorithm
+	QRIF             float64
 }
 
 type Stats struct {

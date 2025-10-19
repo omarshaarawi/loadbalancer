@@ -35,7 +35,7 @@ Then check out:
 
 ## How it works
 
-**Server selection:** Pick d servers at random, score them using `RIF × Latency`, send the request to whoever has the lowest score.
+**Server selection (HCL - Hot-Cold Lexicographic):** Pick d servers at random, calculate RIF threshold at QRIF quantile (default 0.84). Classify servers as "hot" (high RIF) or "cold" (low RIF). If any cold servers exist, pick the one with lowest latency. If all are hot, pick the one with lowest RIF.
 
 **Health checks:** Background goroutine pings all servers on a timer. Dead servers get removed from rotation.
 
@@ -68,6 +68,46 @@ Check RIF metrics while load is running:
 ```bash
 curl http://localhost:8080/metrics | grep -E "active_requests|server_rif"
 ```
+
+## Comparing Algorithms
+
+The repo runs both Prequal and Round-Robin simultaneously so you can compare them in real-time:
+
+- **Prequal**: http://localhost:8080
+- **Round-Robin**: http://localhost:8081
+- Both share the same backend servers
+
+### Multi-tenant simulation
+
+The backend servers simulate the multi-tenant scenario from the paper:
+
+- **server1**: 60% CPU consumed by antagonist load (contended)
+- **server2**: 60% CPU consumed by antagonist load (contended)
+- **server3**: No antagonist load (clean server)
+
+This replicates the paper's setup where some servers share machines with heavy background processes. Prequal should detect the slower response times on server1/server2 and route more traffic to server3, while Round-Robin distributes evenly.
+
+### Side-by-side load ramping test
+
+Run the comparison script to test both algorithms at the same time:
+
+```bash
+./compare.sh --duration 120
+```
+
+This replicates the Paper's Figure 6 methodology:
+- Ramps load from 75% to 174% of capacity in 9 steps
+- Tests both algorithms in parallel with identical load
+- Each step runs for 120 seconds (configurable)
+- Shows comparison of latency and throughput
+
+### Viewing results in Grafana
+
+The dashboard (http://localhost:3001) includes an algorithm filter dropdown:
+- Select "All" to overlay both algorithms
+- Compare latency percentiles (p50, p90, p99, p99.9) side-by-side
+- Watch how RIF distribution differs between algorithms
+- See which handles load spikes better
 
 ## References
 

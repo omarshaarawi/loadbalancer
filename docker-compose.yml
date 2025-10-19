@@ -1,6 +1,7 @@
 services:
-  loadbalancer:
+  loadbalancer-prequal:
     build: .
+    container_name: lb-prequal
     ports:
       - "8080:8080"
     networks:
@@ -9,34 +10,61 @@ services:
       - BACKEND_SERVER1=server1
       - BACKEND_SERVER2=server2
       - BACKEND_SERVER3=server3
+      - LB_ALGORITHM=prequal
+    depends_on:
+      - server1
+      - server2
+      - server3
+
+  loadbalancer-rr:
+    build: .
+    container_name: lb-roundrobin
+    ports:
+      - "8081:8080"
+    networks:
+      - loadbalancer-net
+    environment:
+      - BACKEND_SERVER1=server1
+      - BACKEND_SERVER2=server2
+      - BACKEND_SERVER3=server3
+      - LB_ALGORITHM=roundrobin
     depends_on:
       - server1
       - server2
       - server3
 
   server1:
-    image: nginx
+    build: ./backend
     container_name: server1
     networks:
       - loadbalancer-net
-    volumes:
-      - ./config/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    environment:
+      - SERVER_ID=server1
+      - PORT=80
+      - CPU_LOAD=60
+    cpus: 1.0
 
   server2:
-    image: nginx
+    build: ./backend
     container_name: server2
     networks:
       - loadbalancer-net
-    volumes:
-      - ./config/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    environment:
+      - SERVER_ID=server2
+      - PORT=80
+      - CPU_LOAD=60
+    cpus: 1.0
 
   server3:
-    image: nginx
+    build: ./backend
     container_name: server3
     networks:
       - loadbalancer-net
-    volumes:
-      - ./config/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    environment:
+      - SERVER_ID=server3
+      - PORT=80
+      - CPU_LOAD=0
+    cpus: 1.0
 
   prometheus:
     image: prom/prometheus
